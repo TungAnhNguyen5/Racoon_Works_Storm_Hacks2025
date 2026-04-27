@@ -65,6 +65,9 @@ static long long predictFreedForward(const Problem& prob,
 
 // Run `node_name` as a forward step in `state` and return the next state.
 // Auto-frees inputs whose only remaining uncomputed consumer is this node.
+// If the just-produced output itself is an orphan (no DAG consumer), it is
+// released immediately at end-of-step — matching the spec's instance-based
+// reclamation rule.
 static ScheduleState executeNode(const std::string& node_name,
                                  const Problem& prob,
                                  const ScheduleState& state) {
@@ -108,6 +111,24 @@ static ScheduleState executeNode(const std::string& node_name,
     bool isRecompute = (state.computed.count(node.getName()) > 0);
     next.recompute_flags.push_back(isRecompute);
     next.computed.insert(node.getName());
+
+    // Drop the just-produced output immediately if no future consumer needs
+    // it (orphan). Mirrors the verifier's instance-window reclamation.
+    auto succIt = prob.successors.find(node_name);
+    bool has_future_consumer = false;
+    if (succIt != prob.successors.end()) {
+        for (const auto& cons : succIt->second) {
+            if (next.computed.find(cons) == next.computed.end()) {
+                has_future_consumer = true;
+                break;
+            }
+        }
+    }
+    if (!has_future_consumer) {
+        next.current_memory =
+            std::max<long long>(0, next.current_memory - node.getOutputMem());
+        next.output_memory.erase(node_name);
+    }
     return next;
 }
 
@@ -315,7 +336,10 @@ ScheduleState memoryAwareGreedySchedule(const Problem& prob) {
     };
 
     // Recompute step: add output, do NOT auto-free inputs (would tear down
-    // the chain we just rebuilt). Caller must ensure peak fits.
+    // the chain we just rebuilt) and do NOT orphan-free the output (the
+    // chain's downstream plan steps may consume it via DAG-paths whose
+    // consumers are technically already in `computed`). The protected
+    // set keeps it alive until the goal runs.
     auto runRecompute = [&](const std::string& name) {
         const Node& n = prob.nodes.at(name);
         cur.memory_peak = stepPeak(cur, n, /*freed=*/0);
@@ -624,6 +648,12 @@ ScheduleState streamingTopologicalSchedule(const Problem& prob) {
             auto rcIt = rc.find(in);
             if (rcIt == rc.end()) continue;
             if (--rcIt->second == 0) freeOutput(in);
+        }
+
+        // Orphan instance: no DAG consumer remaining for this fresh output.
+        auto rcSelf = rc.find(name);
+        if (rcSelf != rc.end() && rcSelf->second == 0) {
+            freeOutput(name);
         }
 
         auto sit = prob.successors.find(name);

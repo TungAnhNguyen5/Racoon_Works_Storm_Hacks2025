@@ -161,27 +161,53 @@ memory_peak     = max(memory_peak, step_peak)
 remaining uncomputed consumer is `B` itself (so they get reclaimed after this
 step). Recompute steps pass `freed = 0` because the chain must stay live.
 
+In addition, an output is reclaimed at end-of-step if its **instance window**
+has no remaining consumer — this is the "orphan instance" rule from the
+spec's worked example. Both schedulers apply this immediately when producing
+forward outputs, which keeps `current_resident` aligned with the spec's
+instance-based reclamation model rather than carrying dead bytes into the
+next step.
+
 All memory quantities are 64-bit (the largest test case has a 62 GB limit).
+
+---
+
+## Independent verifier
+
+After scheduling, `main.cpp` runs an **independent re-simulation** of the
+generated schedule that mirrors the spec's reclamation rules exactly. It
+pre-computes, for every output, the set of schedule positions where each
+*instance* of that output is produced and consumed, then frees each instance
+at the end of its last consumer step (or immediately if the instance is an
+orphan with no consumer in its window).
+
+The reported `Memory peak` is the verifier's number, with the scheduler's
+internal estimate also printed for transparency. The program exits non-zero
+if the verified peak exceeds the limit or the verified time disagrees with
+the scheduler's, so any drift between the spill-decision loop and the spec
+model is caught at run time.
 
 ---
 
 ## Validation
 
-All seven shipped examples produce feasible schedules:
+All seven shipped examples produce feasible schedules (verifier-confirmed):
 
-| Example | Nodes   | Limit        | Peak         | Recomputes | Total time |
-|---------|---------|--------------|--------------|------------|------------|
-| 1       |     80  |  42.47 MB    |  42.21 MB    |      74    |     68 654 |
-| 2       |     80  |  85.98 MB    |  69.99 MB    |       0    |     33 532 |
-| 3       |     87  |  33.56 MB    |  33.55 MB    |      49    |     57 859 |
-| 4       |     87  |  54.53 MB    |  50.86 MB    |       0    |     35 094 |
-| 5       | 238 327 |  62.28 GB    |  62.28 GB    | 392 142    | 310 034 061|
-| 6       | 238 327 |  20.70 GB    |  20.70 GB    | 667 277    | 444 693 357|
-| 7       | 238 327 |  42.95 GB    |  42.95 GB    | 519 055    | 371 915 776|
+| Example | Nodes   | Limit        | Peak (verified) | Spills  | Recomputes | Total time |
+|---------|---------|--------------|------------------|---------|------------|------------|
+| 1       |     80  |  42.47 MB    |  39.85 MB        |     58  |      74    |     68 654 |
+| 2       |     80  |  85.98 MB    |  69.99 MB        |      0  |       0    |     33 532 |
+| 3       |     87  |  33.56 MB    |  31.72 MB        |     37  |      49    |     57 859 |
+| 4       |     87  |  54.53 MB    |  50.86 MB        |      0  |       0    |     35 094 |
+| 5       | 238 327 |  62.28 GB    |  62.27 GB        | 124 517 |  289 768   | 259 391 254|
+| 6       | 238 327 |  20.70 GB    |  20.70 GB        | 221 747 |  504 576   | 364 485 066|
+| 7       | 238 327 |  42.95 GB    |  42.95 GB        | 157 433 |  366 433   | 296 879 905|
 
 Examples 5–7 share the same graph but have different memory budgets; the
-recompute count (and therefore total time) scales with how tight the budget
-is, exactly as the spec predicts.
+spill / recompute counts (and therefore total time) scale with how tight the
+budget is, exactly as the spec predicts. A peak that sits close to the limit
+on the large cases is the algorithm filling the budget — leaving slack would
+mean over-spilling and a worse total time.
 
 ---
 
@@ -194,8 +220,10 @@ Algorithm: <chosen scheduler>
 Schedule (order):
 <name1> -> <name2> -> ... -> <nameK>
 * denotes recomputation
-Total time: <accumulated time_cost>
-Memory peak: <bytes> (limit=<bytes>)
+Total time:  <accumulated time_cost>
+Memory peak: <bytes> (limit=<bytes>, headroom=<bytes>)
+  scheduler internal estimate (conservative): <bytes>
+  peak step: <index> (<name>, forward|RECOMPUTE)
 ```
 
 ---
