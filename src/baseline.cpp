@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    long total_memory; std::vector<ParsedNodeSpec> specs; std::string error;
+    long long total_memory; std::vector<ParsedNodeSpec> specs; std::string error;
     if (!parseExamplesFormat(fin, total_memory, specs, error)) {
         fin.clear(); fin.seekg(0);
         if (!parseSimpleFormat(fin, total_memory, specs, error)) {
@@ -37,8 +37,8 @@ int main(int argc, char** argv) {
     std::vector<std::string> order;
     order.reserve(prob.nodes.size());
     long total_time = 0;
-    long memory_peak = 0;
-    long current_memory = 0;
+    long long memory_peak = 0;
+    long long current_memory = 0;
 
     while (!q.empty()) {
         std::string u = q.front(); q.pop();

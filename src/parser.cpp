@@ -20,7 +20,7 @@ static inline std::vector<std::string> splitCommaList(const std::string& value) 
     return out;
 }
 
-bool parseSimpleFormat(std::istream& in, long& total_memory,
+bool parseSimpleFormat(std::istream& in, long long& total_memory,
                        std::vector<ParsedNodeSpec>& nodes_out,
                        std::string& error) {
     total_memory = -1;
@@ -33,7 +33,7 @@ bool parseSimpleFormat(std::istream& in, long& total_memory,
         if (raw.empty() || raw[0] == '#') continue;
         if (raw.rfind("total_memory:", 0) == 0) {
             std::string val = trim(raw.substr(std::string("total_memory:").size()));
-            try { total_memory = std::stol(val); } catch (...) {
+            try { total_memory = std::stoll(val); } catch (...) {
                 error = "Invalid total_memory on line " + std::to_string(line_no);
                 return false;
             }
@@ -66,7 +66,7 @@ bool parseSimpleFormat(std::istream& in, long& total_memory,
 // Example format: first line is "Return <total_memory>"
 // Each subsequent line: "<id> <name> <num_inputs> [input ids...] <run_mem> <time_cost>"
 // Inputs are listed as numeric ids referring to earlier nodes; names appear like "ExpandDims-op0"
-bool parseExamplesFormat(std::istream& in, long& total_memory,
+bool parseExamplesFormat(std::istream& in, long long& total_memory,
                          std::vector<ParsedNodeSpec>& nodes_out,
                          std::string& error) {
     total_memory = -1;
@@ -88,8 +88,8 @@ bool parseExamplesFormat(std::istream& in, long& total_memory,
         std::string name;
         int num_inputs{0};
         std::vector<int> input_ids;
-        long workspace_mem{0};
-        long output_mem{0};
+        long long workspace_mem{0};
+        long long output_mem{0};
         long time{0};
     };
     std::vector<Row> rows;
@@ -105,10 +105,11 @@ bool parseExamplesFormat(std::istream& in, long& total_memory,
         for (int i = 0; i < r.num_inputs; ++i) {
             int iid = -1; if (!(ss >> iid)) { iid = -1; } r.input_ids.push_back(iid);
         }
-        long ws = 0, outm = 0, t = 0;
+        long long ws = 0, outm = 0;
+        long t = 0;
         ss >> ws; ss >> outm; ss >> t;
-        r.workspace_mem = std::max<long>(ws, 0);
-        r.output_mem = std::max<long>(outm, 0);
+        r.workspace_mem = std::max<long long>(ws, 0);
+        r.output_mem = std::max<long long>(outm, 0);
         r.time = std::max<long>(t, 0);
         rows.push_back(std::move(r));
     }
@@ -129,8 +130,8 @@ bool parseExamplesFormat(std::istream& in, long& total_memory,
             auto it = id_to_name.find(iid);
             if (it != id_to_name.end()) spec.inputs.push_back(it->second);
         }
-        spec.run_mem = static_cast<int>(r.workspace_mem);
-        spec.output_mem = static_cast<int>(r.output_mem);
+        spec.run_mem = r.workspace_mem;
+        spec.output_mem = r.output_mem;
         spec.time_cost = static_cast<int>(r.time);
         nodes_out.push_back(std::move(spec));
     }
@@ -139,7 +140,7 @@ bool parseExamplesFormat(std::istream& in, long& total_memory,
     return true;
 }
 
-Problem buildProblem(long total_memory, const std::vector<ParsedNodeSpec>& specs) {
+Problem buildProblem(long long total_memory, const std::vector<ParsedNodeSpec>& specs) {
     Problem prob; prob.total_memory = total_memory;
     for (const auto& s : specs) {
         prob.nodes.emplace(s.name, Node(s.name, s.inputs, s.run_mem, s.output_mem, s.time_cost));

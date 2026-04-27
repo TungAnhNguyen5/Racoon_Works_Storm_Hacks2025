@@ -13,8 +13,7 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to open input: " << argv[1] << "\n";
         return 1;
     }
-    long total_memory; std::vector<ParsedNodeSpec> specs; std::string error;
-    // Try examples format first
+    long long total_memory; std::vector<ParsedNodeSpec> specs; std::string error;
     if (!parseExamplesFormat(fin, total_memory, specs, error)) {
         fin.clear(); fin.seekg(0);
         if (!parseSimpleFormat(fin, total_memory, specs, error)) {
@@ -24,75 +23,34 @@ int main(int argc, char** argv) {
     }
     Problem prob = buildProblem(total_memory, specs);
 
-    // Adaptive parameters based on problem size
-    size_t num_nodes = prob.nodes.size();
-    size_t max_expansions;
-    double time_limit;
-    
-        ScheduleState result;
-    
-    // Set algorithm parameters based on problem size
-    if (num_nodes > 200000) {
-        // Ultra-massive problems: Set minimal parameters
-        std::cout << "Ultra-massive problem detected (" << num_nodes << " nodes)\n";
-        max_expansions = 10;
-        time_limit = 0.1;
-    } else if (num_nodes > 50000) {
-        // Very large problems: Conservative parameters
-        std::cout << "Very large problem detected (" << num_nodes << " nodes)\n";
-        max_expansions = 50;
-        time_limit = 0.2;
-    } else if (num_nodes > 10000) {
-        // Large problems: Fast parameters
-        std::cout << "Large problem detected (" << num_nodes << " nodes)\n";
-        max_expansions = std::min<size_t>(500, num_nodes / 100);
-        time_limit = 1.0;
-    } else if (num_nodes > 1000) {
-        // Medium problems: Moderate parameters
-        std::cout << "Medium problem detected (" << num_nodes << " nodes)\n";
-        max_expansions = std::min<size_t>(10000, num_nodes);
-        time_limit = 3.0;
+    std::cout << "Problem: " << prob.nodes.size() << " nodes, memory limit "
+              << prob.total_memory << "\n";
+
+    // Dispatch by graph size: small/medium graphs use the chain-aware
+    // memory-aware greedy (handles tight memory via spill+recompute);
+    // very large graphs use the streaming topological scheduler (single
+    // pass, ref-counted release, lazy spill heap — no O(N) per-step scans).
+    ScheduleState result;
+    constexpr size_t kStreamingThreshold = 10000;
+    if (prob.nodes.size() >= kStreamingThreshold) {
+        std::cout << "Algorithm: streaming topological greedy\n";
+        result = streamingTopologicalSchedule(prob);
+        if (result.computed.size() != prob.nodes.size()) {
+            std::cerr << "Streaming scheduler did not complete; "
+                      << "falling back to memory-aware greedy.\n";
+            result = memoryAwareGreedySchedule(prob);
+        }
     } else {
-        // Small problems: Full parameters
-        std::cout << "Small problem detected (" << num_nodes << " nodes)\n";
-        max_expansions = 200000;
-        time_limit = 5.0;
+        std::cout << "Algorithm: memory-aware greedy (sticky-goal restoration)\n";
+        result = memoryAwareGreedySchedule(prob);
     }
 
-    // Streamlined algorithm selection - remove complexity, focus on what works
-    
-    if (num_nodes > 100000) {
-        // Ultra-massive (examples 5,6,7): Use only the fastest possible algorithm
-        std::cout << "Ultra-massive problem - using immediate greedy (no complex algorithms)\n";
-        result = greedySchedule(prob);
-    } else if (num_nodes > 50) {
-        // Examples 2,3,4: Use the main algorithm that works
-        std::cout << "Using main algorithm (scheduleWithDebug)\n"; 
-        DebugOptions dbg{};
-        DebugStats stats{};
-        result = scheduleWithDebug(prob, max_expansions, time_limit, dbg, stats);
-    } else {
-        // Very small problems: Simple greedy
-        std::cout << "Small problem - using greedy\n";
-        result = greedySchedule(prob);
+    if (result.computed.size() != prob.nodes.size()) {
+        std::cerr << "No feasible schedule found (computed "
+                  << result.computed.size() << "/" << prob.nodes.size() << ").\n";
+        return 3;
     }
-    
-    // Simple fallback: if main algorithm fails, try minimal alternatives
-    if (result.execution_order.size() != prob.nodes.size()) {
-        std::cout << "Main algorithm incomplete, trying heuristic...\n";
-        result = heuristicSchedule(prob);
-        
-        if (result.execution_order.size() != prob.nodes.size()) {
-            std::cout << "Heuristic failed, trying greedy as final attempt...\n";  
-            result = greedySchedule(prob);
-        }
-        
-        if (result.execution_order.size() != prob.nodes.size()) {
-            std::cerr << "No feasible schedule found.\n";
-            return 3;
-        }
-    }
-    
+
     std::cout << "Schedule (order):\n";
     for (size_t i = 0; i < result.execution_order.size(); ++i) {
         if (i) std::cout << " -> ";
@@ -102,7 +60,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "\n* denotes recomputation\n";
     std::cout << "Total time: " << result.total_time << "\n";
-    std::cout << "Memory peak: " << result.memory_peak << " (limit=" << prob.total_memory << ")\n";
+    std::cout << "Memory peak: " << result.memory_peak
+              << " (limit=" << prob.total_memory << ")\n";
     return 0;
 }
-
